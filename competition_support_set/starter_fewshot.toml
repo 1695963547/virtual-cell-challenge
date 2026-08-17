@@ -1,0 +1,30 @@
+# 本地验证集切分：从 ARC_H1 留出 20 个扰动做 val，并从所有其他细胞系剔除同样的扰动。
+#
+# 为什么要全细胞系剔除：VCC 的 100 个测试扰动与训练池（union 197 个）零重叠，
+# 考的是完全没见过的基因。而 ARC_H1 的 150 个扰动里有 136 个也出现在 k562/rpe1/jurkat，
+# 若只从 ARC_H1 切走，模型仍能从其他细胞系学到该基因的扰动签名，验证分会虚高。
+#
+# val 的 20 个扰动按 pseudobulk delta L2 范数分层抽样，覆盖强度 1.54~25.33（全体 1.54~32.53）。
+# 其他细胞系那份划入 test 而非 val，以保持 val_datasets 纯 ARC_H1。
+
+[datasets]
+replogle_h1 = "/home/zjh/competition_support_set/{competition_train,k562_gwps,rpe1,jurkat,k562,hepg2}.h5"
+
+[training]
+replogle_h1 = "train"
+
+[zeroshot]
+"replogle_h1.hepg2" = "test"
+
+[fewshot]
+# 验证集本体：ARC_H1 内留出的 20 个扰动
+"replogle_h1.ARC_H1" = { val = ["NCK2", "SRC", "MAP3K7", "PMS1", "NRAS", "PAGR1", "TET1", "PLCB3", "SV2A", "NDUFB6", "SLC25A3", "MTA1", "XRCC4", "ATM", "METTL17", "STAG2", "MBTPS1", "SMARCA5", "DNMT1", "RNF20"] }
+
+# 全细胞系剔除：k562 里这 18 个扰动也不参与训练
+"replogle_h1.k562" = { test = ["NCK2", "MAP3K7", "PMS1", "NRAS", "PAGR1", "TET1", "PLCB3", "NDUFB6", "SLC25A3", "MTA1", "XRCC4", "ATM", "METTL17", "STAG2", "MBTPS1", "SMARCA5", "DNMT1", "RNF20"] }
+
+# 全细胞系剔除：rpe1 里这 7 个扰动也不参与训练
+"replogle_h1.rpe1" = { test = ["NDUFB6", "SLC25A3", "METTL17", "STAG2", "MBTPS1", "DNMT1", "RNF20"] }
+
+# 全细胞系剔除：jurkat 里这 7 个扰动也不参与训练
+"replogle_h1.jurkat" = { test = ["NDUFB6", "SLC25A3", "METTL17", "STAG2", "MBTPS1", "DNMT1", "RNF20"] }

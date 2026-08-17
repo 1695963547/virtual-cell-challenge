@@ -1,0 +1,28 @@
+# X_state embedding 版训练配置：数据指向 vci_pretrain（已含 obsm/X_state 的文件），
+# val 切分与 competition_support_set/starter_fewshot.toml 完全一致（ARC_H1 留出 20 扰动，
+# 全细胞系剔除同样的扰动），保证与基因表达版 few-shot 基线公平可比。
+#
+# 训练时需显式传 data.kwargs.embed_key="X_state"，数据模块才会从 obsm 读 2058 维 embedding
+# 而不是 X 矩阵（18080 基因）。
+
+[datasets]
+replogle_h1 = "/home/zjh/state-vcc-local/state/vci_pretrain/{competition_train,k562_gwps,rpe1,jurkat,k562,hepg2}.h5"
+
+[training]
+replogle_h1 = "train"
+
+[zeroshot]
+"replogle_h1.hepg2" = "test"
+
+[fewshot]
+# 验证集本体：ARC_H1 内留出的 20 个扰动（与基因表达版完全相同的清单）
+"replogle_h1.ARC_H1" = { val = ["NCK2", "SRC", "MAP3K7", "PMS1", "NRAS", "PAGR1", "TET1", "PLCB3", "SV2A", "NDUFB6", "SLC25A3", "MTA1", "XRCC4", "ATM", "METTL17", "STAG2", "MBTPS1", "SMARCA5", "DNMT1", "RNF20"] }
+
+# 全细胞系剔除：k562 里这 18 个扰动也不参与训练
+"replogle_h1.k562" = { test = ["NCK2", "MAP3K7", "PMS1", "NRAS", "PAGR1", "TET1", "PLCB3", "NDUFB6", "SLC25A3", "MTA1", "XRCC4", "ATM", "METTL17", "STAG2", "MBTPS1", "SMARCA5", "DNMT1", "RNF20"] }
+
+# 全细胞系剔除：rpe1 里这 7 个扰动也不参与训练
+"replogle_h1.rpe1" = { test = ["NDUFB6", "SLC25A3", "METTL17", "STAG2", "MBTPS1", "DNMT1", "RNF20"] }
+
+# 全细胞系剔除：jurkat 里这 7 个扰动也不参与训练
+"replogle_h1.jurkat" = { test = ["NDUFB6", "SLC25A3", "METTL17", "STAG2", "MBTPS1", "DNMT1", "RNF20"] }

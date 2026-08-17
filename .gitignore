@@ -1,0 +1,63 @@
+# ===== 数据集 / 模型大文件 =====
+*.h5
+*.h5ad
+*.ckpt
+*.pt
+*.pth
+*.pkl
+*.npy
+*.npz
+*.parquet
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.bin
+*.bak
+
+# ===== Python 虚拟环境 / 缓存 =====
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# ===== 系统 / 用户配置文件（不可上传） =====
+.bashrc
+.bash_profile
+.bash_logout
+.bash_history
+.profile
+.zshrc
+.zhistory
+.wget-hsts
+.ssh/
+.cache/
+.config/
+.local/
+.nv/
+.triton/
+.vscode-server/
+.qoder/
+.qoder-server/
+.codebuddy/
+.codebuddy-server-cn/
+.python_history
+.git-credentials
+.gitconfig
+
+# ===== 日志 / 临时文件 =====
+log/
+*.log
+*.tmp
+*.swp
+.DS_Store
+pymp-*/
+
+# ===== 大体积评估结果文件（>10MB） =====
+cell-eval-outdir/
+**/vcc_test_eval_*/**/*.csv

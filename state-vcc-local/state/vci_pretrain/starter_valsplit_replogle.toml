@@ -1,0 +1,26 @@
+# +replogle_full 合训配置：在 starter_valsplit.toml 基础上加入 Replogle K562 GWPS
+# 全量 train-ready 数据（1,961,299 细胞 × 18080，X_state 已嵌入，9709 扰动含 non-targeting 对照 75,328 细胞）。
+# 消融矩阵唯一变量 = 数据（配方与 valsplit 完全一致，见 run_train_state_emb_all_replogle_full.sh）。
+#
+# 切分：
+#   - replogle_h1（6×h5）= train
+#   - replogle_full = train（cell_type=k562，与 competition_train 的 k562 同 key 合并）
+#   - official_val.ARC_H1 = val（官方 50 未见扰动，best.ckpt 由它选出，与 valsplit 可比）
+#   - hepg2 = test（占位不用）
+#
+# 注意：合训后 K562 占细胞 ~83%、扰动 ~98%，留意稀释效应（见 VCC_OPTIMIZATION_PLAN 路线 E）。
+
+[datasets]
+replogle_h1 = "/home/zjh/state-vcc-local/state/vci_pretrain/{competition_train,k562_gwps,rpe1,jurkat,k562,hepg2}.h5"
+official_val = "/home/zjh/state-vcc-local/state/vci_pretrain/adata_Validation_trainready.h5ad"
+replogle_full = "/home/zjh/state-vcc-local/state/vci_pretrain/replogle_full_trainready.h5ad"
+
+[training]
+replogle_h1 = "train"
+replogle_full = "train"
+
+[zeroshot]
+"replogle_h1.hepg2" = "test"
+"official_val.ARC_H1" = "val"
+
+[fewshot]

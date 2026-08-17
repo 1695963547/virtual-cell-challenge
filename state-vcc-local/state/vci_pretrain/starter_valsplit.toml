@@ -1,0 +1,25 @@
+# valsplit 版训练配置：在 starter.toml 基础上，把官方 validation split（已嵌 X_state、
+# 补 cell_type/batch_var、log1p 对齐）作为训练时的 val 集 —— val_loss 从
+# "hepg2 latent energy"（三重错配，见 STATUS 4.4）变为"H1 官方 50 个未见扰动"。
+#
+# 切分逻辑（cell_load _process_celltype zeroshot 分支）：
+#   - "official_val.ARC_H1" = "val"：该文件的全部扰动细胞进 val_datasets，
+#     其 NTC 对照细胞按惯例进 train（与 hepg2  zeroshot 的处理一致）
+#   - competition_train 的 ARC_H1 属于 "replogle_h1.ARC_H1"，不受此规则影响，仍全部训练
+#   - hepg2 保持 test（训练中不用，仅占位）
+#
+# 注意：用本配置训出的模型，在 validation 上的评测带模型选择偏差（best.ckpt 由它选出），
+# 对外报数仍须以 test 为准。
+
+[datasets]
+replogle_h1 = "/home/zjh/state-vcc-local/state/vci_pretrain/{competition_train,k562_gwps,rpe1,jurkat,k562,hepg2}.h5"
+official_val = "/home/zjh/state-vcc-local/state/vci_pretrain/adata_Validation_trainready.h5ad"
+
+[training]
+replogle_h1 = "train"
+
+[zeroshot]
+"replogle_h1.hepg2" = "test"
+"official_val.ARC_H1" = "val"
+
+[fewshot]
