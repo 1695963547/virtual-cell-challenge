@@ -82,7 +82,7 @@ def mmd2_unbiased_multi_sigma(X, Y, sigmas):
 
     return torch.stack(vals).mean()
 
-def train_step(source, target, perturbation_id, vf, criterion, accelerator, noise_type='Poisson', mode="predict_y", cell_line_id=None):
+def train_step(source, target, perturbation_id, vf, criterion, accelerator, noise_type='Poisson', mode="predict_y", cell_line_id=None, perturbation_emb=None):
     B = source.shape[0]
     device = accelerator.device
     
@@ -107,7 +107,7 @@ def train_step(source, target, perturbation_id, vf, criterion, accelerator, nois
         # VCC: bf16 AMP——H20 的 FP32 算力弱、BF16 tensor core 强，实测加速 2.6-2.8x；
         # 仅前向用 bf16，损失与 MMD 保持 fp32 计算
         with torch.autocast('cuda', dtype=torch.bfloat16):
-            predicted_x_t_velocity = vf(gene_input,path_x1.x_t, path_x1.t,source,perturbation_id, gene_input, mode=mode, cell_line_id=cell_line_id)
+            predicted_x_t_velocity = vf(gene_input,path_x1.x_t, path_x1.t,source,perturbation_id, gene_input, mode=mode, cell_line_id=cell_line_id, perturbation_emb=perturbation_emb)
         loss = ((predicted_x_t_velocity.float() - path_x1.dx_t)**2).mean()
         
         if config.use_mmd_loss:
@@ -125,7 +125,7 @@ def train_step(source, target, perturbation_id, vf, criterion, accelerator, nois
             base_vf = vf.module
         else:
             base_vf = vf
-        p_embed_gt = base_vf.get_perturbation_emb(perturbation_id=perturbation_id, cell_1=source)
+        p_embed_gt = base_vf.get_perturbation_emb(perturbation_id=perturbation_id, perturbation_emb=perturbation_emb, cell_1=source)
         pred = F.normalize(predicted_p_embed, dim=-1)
         tgt  = F.normalize(p_embed_gt.detach(), dim=-1)
         loss = 1 - (pred * tgt).sum(dim=-1).mean()  # cosine distance
@@ -181,6 +181,12 @@ def test(data_sampler, vf, accelerator,  batch_size=128, path='./',vocab=None,sc
             perturbation_name_crisper = [inverse_dict[int(p_id)] for p_id in perturbation_id[0].cpu().numpy()]
             perturbation_id = torch.tensor(vocab.encode(perturbation_name_crisper), dtype=torch.long, device=device)
             perturbation_id = perturbation_id.repeat(source.shape[0],1)
+        elif config.perturbation_function == 'esm':
+            # VCC: ESM-2 条件化——构造 (1, esm_dim) 行向量，循环内按 batch 大小 expand
+            perturbation_name_esm = [inverse_dict[int(p_id)] for p_id in perturbation_id[0].cpu().numpy()]
+            _zero = torch.zeros(config.esm_dim, dtype=source.dtype)
+            esm_vec = torch.stack([esm_features.get(n, _zero) for n in perturbation_name_esm]).mean(dim=0)  # (esm_dim,)
+            perturbation_emb_row = esm_vec.unsqueeze(0).to(device)  # (1, esm_dim)
         
         idx = torch.randperm(source.shape[0])
         source = source[idx]
@@ -193,12 +199,17 @@ def test(data_sampler, vf, accelerator,  batch_size=128, path='./',vocab=None,sc
             cell_line_id_t = None
         
         pred_expressions = []
-        for i in trange(0, N, batch_size):
-            batch_perturbation_id = perturbation_id[0].repeat(source[i:i+batch_size].shape[0],1)
-            
-            batch_perturbation_id = batch_perturbation_id.to(accelerator.device)
-            
-            pred_expression = generate_sample(wrapped_vf,source[i:i+batch_size],batch_perturbation_id,vf,gene_ids=gene_ids_test,gene_all=gene_ids_test,steps=config.eval_ode_steps,cell_line_id=None if cell_line_id_t is None else cell_line_id_t[i:i+batch_size])
+        # VCC: eval 用小 batch（eval_batch_size ≤ batch_size）分批生成，降低 ODE 采样峰值显存
+        eval_bs = min(getattr(config, 'eval_batch_size', batch_size), batch_size)
+        for i in trange(0, N, eval_bs):
+            if config.perturbation_function == 'crisper':
+                batch_perturbation_id = perturbation_id[0].repeat(source[i:i+batch_size].shape[0],1)
+                batch_perturbation_id = batch_perturbation_id.to(accelerator.device)
+                batch_perturbation_emb = None
+            else:
+                batch_perturbation_id = None
+                batch_perturbation_emb = perturbation_emb_row.expand(source[i:i+batch_size].shape[0], -1)
+            pred_expression = generate_sample(wrapped_vf,source[i:i+batch_size],batch_perturbation_id,vf,gene_ids=gene_ids_test,gene_all=gene_ids_test,steps=config.eval_ode_steps,cell_line_id=None if cell_line_id_t is None else cell_line_id_t[i:i+batch_size],perturbation_emb=batch_perturbation_emb)
             pred_expressions.append(pred_expression)
             
         pred_expressions = torch.cat(pred_expressions, dim=0).cpu().numpy()
@@ -243,7 +254,7 @@ def test(data_sampler, vf, accelerator,  batch_size=128, path='./',vocab=None,sc
     
     return eval_score
 
-def wrapped_vf(target,t,source,perturbation_id,vf,gene_ids, gene_all,cell_line_id=None):
+def wrapped_vf(target,t,source,perturbation_id,vf,gene_ids, gene_all,cell_line_id=None, perturbation_emb=None):
     
     gene = gene_ids.repeat(source.shape[0],1).to(device)
     # bf16 eval: 模型已是 bf16，把浮点输入也转 bf16
@@ -251,14 +262,14 @@ def wrapped_vf(target,t,source,perturbation_id,vf,gene_ids, gene_all,cell_line_i
         target = target.to(torch.bfloat16)
         source = source.to(torch.bfloat16)
         t = t.to(torch.bfloat16)
-    predicted_x_t_velocity = vf(gene,target,t,source,perturbation_id,gene_all,cell_line_id=cell_line_id)
+    predicted_x_t_velocity = vf(gene,target,t,source,perturbation_id,gene_all,cell_line_id=cell_line_id,perturbation_emb=perturbation_emb)
     # 输出转回 fp32（odeint 需 fp32）
     if predicted_x_t_velocity.dtype == torch.bfloat16:
         predicted_x_t_velocity = predicted_x_t_velocity.float()
     return predicted_x_t_velocity
 
 @torch.no_grad()
-def generate_sample(wrapped_vf,source,condition_vec=None,vf=None,gene_ids=None,gene_all=None,steps=20,method="rk4",cell_line_id=None):
+def generate_sample(wrapped_vf,source,condition_vec=None,vf=None,gene_ids=None,gene_all=None,steps=20,method="rk4",cell_line_id=None,perturbation_emb=None):
     
     noise_type = config.noise_type
     if noise_type=="Gaussian":
@@ -270,7 +281,7 @@ def generate_sample(wrapped_vf,source,condition_vec=None,vf=None,gene_ids=None,g
             per_cell_L=getattr(config, "poisson_target_sum", 1e4), 
         )
         
-    traj = torchdiffeq.odeint(lambda t,x: wrapped_vf(x,t,source,condition_vec,vf,gene_ids,gene_all,cell_line_id=cell_line_id),
+    traj = torchdiffeq.odeint(lambda t,x: wrapped_vf(x,t,source,condition_vec,vf,gene_ids,gene_all,cell_line_id=cell_line_id,perturbation_emb=perturbation_emb),
                               target_noise,
                               torch.linspace(0,1,steps).to(source.device),
                               atol=1e-4,
@@ -319,8 +330,17 @@ if __name__ == "__main__":
                            d_perturbation = config.d_model,
                            fusion_method = config.fusion_method,
                            perturbation_function = config.perturbation_function,
-                           mask_path = mask_path
+                           mask_path = mask_path,
+                           esm_dim = config.esm_dim
                            )
+    
+    # VCC: ESM-2 条件化——加载蛋白嵌入字典 {gene_name: (5120,)}
+    global esm_features
+    if config.perturbation_function == 'esm':
+        assert config.esm_features_path, "perturbation_function=esm 需要指定 esm_features_path"
+        esm_features = torch.load(config.esm_features_path, map_location='cpu')
+        if accelerator.is_main_process:
+            print(f"[esm] loaded {len(esm_features)} ESM-2 features, dim={config.esm_dim}")
     
     model_path = config.make_path()
 
@@ -338,8 +358,19 @@ if __name__ == "__main__":
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.steps, eta_min=config.eta_min)
     
     if config.checkpoint_path != '':
-        # VCC: 恢复训练——load_checkpoint 返回 iteration，从这里继续
-        start_iteration, _ = load_checkpoint(config.checkpoint_path, vf, optimizer, scheduler)
+        if config.perturbation_function == 'esm':
+            # VCC: ESM 续训——旧 checkpoint 无 esm_proj 层，strict 加载会崩；
+            # 跳过新增 key，esm_proj 用随机初始化（配合 freeze_esm_steps 先训投影层）
+            checkpoint = torch.load(config.checkpoint_path, map_location='cpu')
+            state_dict = checkpoint['model_state_dict']
+            missing = [k for k in state_dict if k not in vf.state_dict()]
+            vf.load_state_dict({k: v for k, v in state_dict.items() if k not in missing}, strict=False)
+            start_iteration = checkpoint['iteration']
+            eval_score = checkpoint.get('eval_score', float('-inf'))
+            print(f"loading {config.checkpoint_path} (esm-mode, skip {len(missing)} new keys), iteration: {start_iteration}, eval_score: {eval_score}")
+        else:
+            # VCC: 恢复训练——load_checkpoint 返回 iteration，从这里继续
+            start_iteration, _ = load_checkpoint(config.checkpoint_path, vf, optimizer, scheduler)
     else:
         start_iteration = 0 
     vf = accelerator.prepare(vf)
@@ -354,14 +385,27 @@ if __name__ == "__main__":
             target = batch_data['tgt_cell_data'].squeeze(0)
             perturbation_id = batch_data['condition_id'].squeeze(0).to(device)
             cell_line_id = batch_data['cell_line_id'].squeeze(0).to(device) if 'cell_line_id' in batch_data else None
+            perturbation_emb = None
             if config.perturbation_function == 'crisper':
                 perturbation_name = [inverse_dict[int(p_id)] for p_id in perturbation_id[0].cpu().numpy()]
                 perturbation_id = torch.tensor(vocab.encode(perturbation_name), dtype=torch.long, device=device)
                 perturbation_id = perturbation_id.repeat(source.shape[0],1)
+            elif config.perturbation_function == 'esm':
+                # VCC: ESM-2 条件化——训练时用扰动基因的 5120 维蛋白嵌入替换查表 token
+                perturbation_name = [inverse_dict[int(p_id)] for p_id in perturbation_id[0].cpu().numpy()]
+                _zero = torch.zeros(config.esm_dim, dtype=source.dtype)
+                esm_vec = torch.stack([esm_features.get(n, _zero) for n in perturbation_name]).mean(dim=0)  # (esm_dim,)
+                perturbation_emb = esm_vec.unsqueeze(0).to(device).expand(source.shape[0], -1).contiguous()
+                perturbation_id = None
             
             
             set_requires_grad_for_p_only(vf, p_only=config.mode)
-            loss = train_step(source, target, perturbation_id, vf, criterion, accelerator, noise_type=config.noise_type, mode=config.mode, cell_line_id=cell_line_id)
+            # VCC: ESM 续训——前 freeze_esm_steps 步只训练 esm_proj 投影层，其余参数冻结
+            if config.perturbation_function == 'esm' and config.freeze_esm_steps > 0 and (iteration - start_iteration) < config.freeze_esm_steps:
+                base_vf = vf.module if hasattr(vf, 'module') else vf
+                for n, p in base_vf.named_parameters():
+                    p.requires_grad_(n.startswith('esm_proj.'))
+            loss = train_step(source, target, perturbation_id, vf, criterion, accelerator, noise_type=config.noise_type, mode=config.mode, cell_line_id=cell_line_id, perturbation_emb=perturbation_emb)
             optimizer.zero_grad(set_to_none=True)
             accelerator.backward(loss)
             optimizer.step()

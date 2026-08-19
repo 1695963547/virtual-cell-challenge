@@ -80,6 +80,11 @@ def main():
                         default='./data/vcc/mask_fold_0topk_30additive_negative_edge.pt')
     parser.add_argument('--vocab_path', type=str,
                         default='./src/tokenizer/vcc_18080_highly_vocab.json')
+    parser.add_argument('--perturbation_function', type=str, default='crisper',
+                        choices=['crisper', 'esm'])
+    parser.add_argument('--esm_features_path', type=str,
+                        default='/home/zjh/competition_support_set/ESM2_pert_features.pt')
+    parser.add_argument('--esm_dim', type=int, default=5120)
     args = parser.parse_args()
 
     accelerator = Accelerator()
@@ -93,7 +98,8 @@ def main():
     vf = instantiate_model(
         model_type='origin', ntoken=args.ntoken, d_model=args.d_model,
         d_perturbation=args.d_model, fusion_method='differential_perceiver',
-        perturbation_function='crisper', mask_path=args.mask_path,
+        perturbation_function=args.perturbation_function, mask_path=args.mask_path,
+        esm_dim=args.esm_dim,
     )
     ckpt = torch.load(args.checkpoint_path, map_location='cpu')
     vf.load_state_dict(ckpt['model_state_dict'])
@@ -158,10 +164,17 @@ def main():
         idx = torch.randperm(ctrl_X.shape[0])[:args.n_cells]
         source = ctrl_X[idx].to(device)
 
-        # crisper 编码：target_gene → vocab token → [n_cells, 1]
-        pert_ids = vocab.encode([pert_name])  # e.g. [6360]
-        pert_id = torch.tensor(pert_ids, dtype=torch.long, device=device)
-        pert_id_batch = pert_id.repeat(source.shape[0], 1)
+        if args.perturbation_function == 'crisper':
+            # crisper 编码：target_gene → vocab token → [n_cells, 1]
+            pert_ids = vocab.encode([pert_name])  # e.g. [6360]
+            pert_id = torch.tensor(pert_ids, dtype=torch.long, device=device)
+            pert_id_batch = pert_id.repeat(source.shape[0], 1)
+        else:
+            # esm 编码：target_gene → 5120 维蛋白嵌入 → [n_cells, esm_dim]
+            pert_id_batch = None
+            esm_vec = esm_features.get(pert_name,
+                                       torch.zeros(args.esm_dim, dtype=source.dtype))
+            pert_emb_row = esm_vec.unsqueeze(0).to(device)  # (1, esm_dim)
 
         # cell_line_id = 0 (H1, 与 val 一致)
         cell_line_id = torch.zeros(source.shape[0], dtype=torch.long, device=device)
@@ -170,12 +183,18 @@ def main():
         preds = []
         for i in range(0, source.shape[0], args.batch_size):
             src_batch = source[i:i + args.batch_size]
-            pid_batch = pert_id_batch[i:i + args.batch_size]
+            if args.perturbation_function == 'crisper':
+                pid_batch = pert_id_batch[i:i + args.batch_size]
+                emb_batch = None
+            else:
+                pid_batch = None
+                emb_batch = pert_emb_row.expand(src_batch.shape[0], -1)
             cl_batch = cell_line_id[i:i + args.batch_size]
             pred_expr = generate_sample(
                 src_batch, pid_batch, vf, gene_ids, gene_ids,
                 steps=args.ode_steps, cell_line_id=cl_batch,
                 device=device, noise_type='Gaussian',
+                perturbation_emb=emb_batch,
             )
             preds.append(pred_expr.cpu().numpy())
 

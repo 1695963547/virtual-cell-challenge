@@ -31,9 +31,12 @@ log() { echo "[$(date '+%F %T')] $*"; }
 
 cd "$STATE" || { log "!! 进不去 $STATE"; exit 1; }
 
-# multiprocessing 临时目录（pymp-*，内含 listener socket）在训练被 kill -9/OOM
-# 中断时会残留。trap EXIT 保证本次训练结束（含异常退出）自动清理；开头再清一次
-# 兜底上一次的残留。若 TMPDIR 指向 state 外部，pymp 会落在别处，不受本清理影响。
+# 钉住 multiprocessing 临时目录：无论外层 shell 的 TMPDIR 是什么，
+# pymp-*（内含 listener socket）一律落在 /tmp，由系统定期清理，不混入代码目录。
+export TMPDIR=/tmp
+
+# 双保险：trap EXIT 保证本次训练结束（含异常退出）自动清理；开头再清一次
+# 兜底上一次的残留。
 cleanup_pymp() { rm -rf "$STATE"/pymp-* 2>/dev/null; }
 trap cleanup_pymp EXIT
 cleanup_pymp

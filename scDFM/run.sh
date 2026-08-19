@@ -1,4 +1,6 @@
 export PYTHONPATH=./
+# 钉住 multiprocessing 临时目录（pymp-*），避免外层 shell 的 TMPDIR 让它混入代码目录
+export TMPDIR=/tmp
 
 python  src/script/run.py  \
 --batch_size=48 \

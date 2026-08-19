@@ -114,11 +114,19 @@ class model(nn.Module):
                  use_perturbation_interaction: bool = True,
                  mask_path: str = None,
                  n_cell_line: int = 4,
+                 esm_dim: int = 5120,
                  ):
         super().__init__()
         self.t_embedder = TimestepEmbedder(d_model)
         self.cell_line_encoder = BatchLabelEncoder(n_cell_line, d_model)  # VCC: H1/K562/RPE1/Jurkat
         self.perturbation_embedder = BatchLabelEncoder(ntoken, d_model,)
+        self.esm_dim = esm_dim
+        if perturbation_function == 'esm':
+            # ESM-2 蛋白嵌入 (5120) -> d_model 的可训练投影层
+            self.esm_proj = nn.Sequential(
+                nn.Linear(esm_dim, d_model),
+                nn.LayerNorm(d_model),
+            )
         self.fusion_method = fusion_method
         self.perturbation_function = perturbation_function
         self.fusion_layer = nn.Sequential(nn.Linear(2*d_model, d_model), 
@@ -200,7 +208,11 @@ class model(nn.Module):
                 perturbation_emb = perturbation_emb.unsqueeze(0)
             if perturbation_emb.size(0) == 1:
                 perturbation_emb = perturbation_emb.expand(cell_1.shape[0], -1).contiguous()
-            perturbation_emb = self.perturbation_embedder.enc_norm(perturbation_emb)
+            if self.perturbation_function == 'esm':
+                # ESM-2 条件化：5120 维蛋白嵌入 -> d_model 投影
+                perturbation_emb = self.esm_proj(perturbation_emb)
+            else:
+                perturbation_emb = self.perturbation_embedder.enc_norm(perturbation_emb)
         
         return perturbation_emb
     

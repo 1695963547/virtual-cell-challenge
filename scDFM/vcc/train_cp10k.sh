@@ -2,6 +2,8 @@
 # scDFM VCC 重训：全链路 log1p(CP10K) 口径（修复训练/推理归一化不一致）
 cd /home/zjh/scDFM || exit 1
 export PYTHONPATH=./
+# 钉住 multiprocessing 临时目录（pymp-*），避免外层 shell 的 TMPDIR 让它混入代码目录
+export TMPDIR=/tmp
 CUDA_VISIBLE_DEVICES=0,1,2,3 setsid nohup \
   /home/zjh/state-vcc-local/state/.venv/bin/torchrun --nproc_per_node=4 --master_port=29500 \
   src/script/run.py \

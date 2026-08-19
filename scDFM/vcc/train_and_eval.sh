@@ -5,6 +5,8 @@ set -o pipefail
 
 cd /home/zjh/scDFM || exit 1
 export PYTHONPATH=./
+# 钉住 multiprocessing 临时目录（pymp-*），避免外层 shell 的 TMPDIR 让它混入代码目录
+export TMPDIR=/tmp
 
 LOG_DIR=/home/zjh/log
 TRAIN_LOG="${LOG_DIR}/scdfm_vcc_train_20k.log"

@@ -13,7 +13,7 @@ def instantiate_model(model_type: str, **kwargs):
             layers = 4
         else:
             layers = 8
-        return OriginModel(ntoken=kwargs['ntoken'], d_model=kwargs['d_model'], fusion_method=kwargs['fusion_method'], nlayers=layers, perturbation_function=kwargs['perturbation_function'], mask_path=kwargs['mask_path'])
+        return OriginModel(ntoken=kwargs['ntoken'], d_model=kwargs['d_model'], fusion_method=kwargs['fusion_method'], nlayers=layers, perturbation_function=kwargs['perturbation_function'], mask_path=kwargs['mask_path'], esm_dim=kwargs.get('esm_dim', 5120))
     else:
         raise ValueError(f"Invalid model type: {model_type}")
     

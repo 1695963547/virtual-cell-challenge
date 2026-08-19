@@ -17,7 +17,10 @@ class FlowConfig:
     test_only: bool = False
     # Perturbation related parameters
     data_name: str = "combosciplex"
-    perturbation_function: str = 'crisper' 
+    perturbation_function: str = 'crisper'  # crisper / esm
+    esm_dim: int = 5120                     # ESM-2 蛋白嵌入维度
+    esm_features_path: str = ''             # ESM-2 特征 dict 路径（perturbation_function=esm 时必填）
+    freeze_esm_steps: int = 0               # VCC: >0 时续训前 N 步只训练 esm_proj（其余参数冻结）
     noise_type: str = "Gaussian"
     poisson_alpha: float = 0.8
     poisson_target_sum: int = -1
@@ -41,6 +44,7 @@ class FlowConfig:
     eval_ode_steps: int = 10  # VCC: 10 步足够（rk4 每步 4 次前向，20 步耗时翻倍收益小）
     eval_bf16: bool = False  # VCC: eval 时模型转 bf16 + flash attention 加速
     eval_subset_perturbations: int = 0  # VCC: >0 时监控 eval 只用等间隔采样的 N 个扰动（0=全部）
+    eval_batch_size: int = 128  # VCC: eval 生成时每批细胞数，小于 batch_size 可降低峰值显存（防 eval OOM）
     seed: int = 0  # VCC: >0 时固定随机种子（DDP 下每 rank 自动错开）
     
     def __post_init__(self):
