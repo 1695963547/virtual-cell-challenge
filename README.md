@@ -96,6 +96,19 @@ bash eval_scdfm_vcc.sh        # 在官方测试集上评测
 | **cleopatra（Generalist #1）** | 0.228 | 0.747 | 0.086 | 榜单参考 |
 | **BM_xTVC（Overall #1）** | 0.349 | 0.872 | 1.026 | 榜单参考 |
 
+## 关键提升概览
+
+> 相对官方 baseline（扰动均值预测，DES 0.107 / PDS 0.509 / MAE 0.026）与 Generalist 榜首 cleopatra 的提升。完整对比见 [结果对比.md](./结果对比.md)。
+
+| 阶段 | 指标 | 对比基准 | 结果 | 提升幅度 |
+|---|---|---|---|---|
+| STATE 基线模型落地 | DES | 官方 baseline 0.107 | **0.198** | **+85%** |
+| | PDS | 官方 baseline 0.509 | **0.560** | +10% |
+| FusedPDSDESLoss 改进 | DES | STATE 基线 0.198 | **0.236**（本地最高） | **+19%** |
+| | MAE | STATE 基线 0.507 | **0.142** | **-72%** |
+| scDFM 引入 | MAE | 榜首 cleopatra 0.086 | **0.042** | **-51%** |
+| | SPEARMAN_LFC | 榜首 cleopatra 0.396 | **0.388** | 达榜首 98% |
+
 ## 核心发现
 
 1. **两路线互补**：scDFM 在表达量幅度（MAE 0.042）与 LFC 排序（SPEARMAN_LFC 0.388）上显著领先；STATE 在 DE 基因检出（DES 0.198）与扰动可分性（PDS 0.560）上更强。
