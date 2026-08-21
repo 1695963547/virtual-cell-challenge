@@ -1,14 +1,30 @@
-# Virtual Cell Challenge (VCC) — 单细胞扰动响应预测复现项目
+# Virtual Cell Challenge — 单细胞扰动响应预测复现
 
-> 虚拟细胞挑战赛（[Virtual Cell Challenge](https://virtualcellchallenge.org/)，Arc Institute 举办）参赛与复现项目。
-> 任务：给定 control 细胞 + 一个基因扰动（CRISPRi 敲低），预测扰动后细胞的基因表达分布。
+> 本项目是 [Virtual Cell Challenge 2025](https://virtualcellchallenge.org/)（Arc Institute）的参赛与复现仓库。
+> 任务为 **跨细胞系预测 H1 人胚胎干细胞上未见 CRISPRi 扰动的全转录组响应**。
 
-本项目包含两条技术路线的完整复现与优化：
+## 官方任务
 
-| 路线 | 模型 | 方法 | 说明 |
+**跨细胞系泛化到 H1**：用其他细胞系（K562、RPE1、Jurkat、HepG2）的公开扰动数据 + H1 的 151 个已知扰动，预测 H1 细胞系上未见 CRISPRi 扰动的全转录组响应。
+
+- **目标细胞系**：H1 人胚胎干细胞（hESCs）
+- **核心挑战**：跨细胞系的分布外泛化（H1 与 K562、A375 等常见训练细胞系存在显著分布差异）
+- **关键约束**：训练时已提供 H1 的 151 个已知扰动，任务不是 few-shot adaptation，而是把多细胞系知识迁移到 H1 的未见扰动上
+- **评测工具**：[cell-eval](https://github.com/ArcInstitute/cell-eval)（Arc Institute 官方）
+- **评测指标**：7 项指标，其中 DES / PDS / MAE 决定 Overall Score
+
+## 两条技术路线
+
+本仓库完整复现并优化了两个前沿模型：
+
+| 路线 | 模型 | 方法 | 目录 |
 |---|---|---|---|
-| **scDFM** | ICLR 2026 开源 | Distributional Flow Matching（条件生成模型） | `scDFM/`，flow-fusion + crisper 扰动编码 |
-| **STATE** | Arc Institute 开源 | Transformer + SE 嵌入 | `state-vcc-local/`，基因空间直训 / SE+decoder 双路线 |
+| **scDFM** | ICLR 2026 开源 | Distributional Flow Matching（条件生成模型） | `scDFM/` |
+| **STATE** | Arc Institute 开源 | Transformer + SE-600M 嵌入 | `state-vcc-local/` |
+
+- **STATE 路线**：在 18080 维基因空间直训，本地 Overall 估算最佳（6.68），DES 0.198 / PDS 0.560 本地领先。
+- **scDFM 路线**：条件生成建模，MAE 0.042 / SPEARMAN_LFC 0.388 本地最强。
+- **互补性**：scDFM 擅长度量级与 LFC 排序，STATE 擅长 DE 基因检出与扰动可分性。
 
 ## 目录结构
 
@@ -28,44 +44,86 @@
 ├── download_vcc_test.sh      # 测试集下载脚本（断点续传 + crc32c 校验）
 ├── 指标解释_DES_PDS与MAE权衡.md  # 三个核心指标的原理与权衡分析
 ├── 结果对比.md                   # 全部实验的 7 项指标详细对比
-└── VCC_REVIEW.md             # ★ 技术复盘：从背景到结论的完整梳理
+└── VCC_REVIEW.md             # 技术复盘：从背景到结论的完整梳理
 ```
 
-## 核心工作
+## 快速开始
 
-1. **两个前沿开源模型的完整复现**：scDFM（ICLR 2026，Flow Matching）与 STATE（Transformer），并适配 VCC 任务（跨细胞系泛化、单基因扰动）。
+### 环境
 
-2. **大规模工程优化（H20 × 4 卡）**：
-   - **bf16 混合精度训练**：H20 的 FP32 算力弱而 BF16 tensor core 强，实测训练加速 **2.6-2.8×**
-   - **18080 全基因显存优化**：利用 matmul 线性性对注意力层做**数学等价改写**，避免 ~500GB 显存的 OOM
-   - **多卡并行评测**：扰动按 rank 分片，消除原版 3 卡重复跑全量的 3× 浪费
-   - 每 rank 独立评测、checkpoint 断点恢复、训练循环主动 break 等 13 处训练层改进
+```bash
+conda create -n vcc python=3.10
+conda activate vcc
+pip install -r state-vcc-local/requirements.txt
+```
 
-3. **三条实验路线与深度消融**：
-   - 基因空间直训（18080 维）vs SE latent + decoder（18080→2058→18080）
-   - 自研 **FusedPDSDESLoss**（加权 MSE + 对比学习 PDS 代理 + 方向一致性）
-   - FCN pseudo-bulk 轻量路线（参照 2025 亚军 XLearning Lab 方案）
-   - cs × loss 消融矩阵、模型容量消融（108M / 201M / 301M）
+### 数据准备
 
-4. **对评测指标的深入理解**：厘清了官方 DES/PDS/MAE 与 cell-eval 的对应关系（`overlap_at_N` / `discrimination_score_l1` / `mae`），并系统分析了**提升 DES/PDS 必然牺牲 MAE 的 fundamental trade-off**——这也解释了为什么榜首队伍普遍选择"放大扰动响应"。
+```bash
+bash download_vcc_test.sh
+```
+
+训练数据已置于 `competition_support_set/` 与 `state-vcc-local/state/vci_pretrain/`。
+
+### STATE 路线训练与评测
+
+```bash
+cd state-vcc-local
+bash run_train_state_emb_all_lg.sh    # 训练 state_lg 301M 全基因直训模型
+bash run_eval_state_emb_all_lg.sh     # 在官方测试集上评测
+```
+
+### scDFM 路线训练与评测
+
+```bash
+cd scDFM/vcc
+bash train_scdfm_vcc.sh       # 训练 scDFM 适配模型
+bash eval_scdfm_vcc.sh        # 在官方测试集上评测
+```
+
+> 完整训练/评测脚本与超参见各目录下的 `*.sh` 与 `*.toml` 文件。
 
 ## 主要结果
 
-> 完整 7 项指标（DES/PDS/MAE/SPEARMAN/SPEARMAN_LFC/AUPRC/PEARSON）见 [结果对比.md](./结果对比.md)，完整技术复盘见 [VCC_REVIEW.md](./VCC_REVIEW.md)。
+> 完整 7 项指标（DES / PDS / MAE / SPEARMAN / SPEARMAN_LFC / AUPRC / PEARSON）见 [结果对比.md](./结果对比.md)。
+> 所有本地得分均通过官方 `cell-eval` 在 `adata_Test.h5ad` 上评测得到。
 
 | 模型 | DES↑ | PDS↑ | MAE↓ | 备注 |
 |---|---|---|---|---|
 | **state_lg（本地最佳，301M）** | **0.198** | **0.560** | 0.507 | Transformer 路线，本地 Overall 估算 6.68 |
-| **scDFM（iter15000）** | 0.084 | 0.503 | **0.042** | MAE 与 SPEARMAN_LFC 为本地各模型中最强 |
+| **scDFM（iter15000）** | 0.084 | 0.503 | **0.042** | MAE 与 SPEARMAN_LFC 本地各模型最强 |
 | **delta_mse（改进 loss）** | **0.236** | 0.526 | 0.142 | DES 为所有实验最高（+19% vs state_lg） |
-| **cleopatra（官方 Generalist #1）** | 0.228 | 0.747 | 0.086 | 榜单参考 |
-| **BM_xTVC（官方 Overall #1）** | 0.349 | 0.872 | 1.026 | 榜单参考 |
+| **cleopatra（Generalist #1）** | 0.228 | 0.747 | 0.086 | 榜单参考 |
+| **BM_xTVC（Overall #1）** | 0.349 | 0.872 | 1.026 | 榜单参考 |
 
-**关键发现**：
-- 两路线互补——scDFM 在表达量幅度（MAE 0.042）与幅度排序（SPEARMAN_LFC 0.388）上显著领先；STATE 在 DE 基因检出（DES 0.198）与扰动可区分性（PDS 0.560）上更强
-- 换模型容量（108M→301M）无法突破 PDS 瓶颈（0.53~0.56 卡住），瓶颈在**扰动多样性不足**而非模型容量
-- MAE 基本"退出竞争"：均值 baseline 的 MAE（≈0.026）几乎无法被超越，顶尖队伍 MAE_scaled 全为 0
+## 核心发现
 
-## 技术复盘
+1. **两路线互补**：scDFM 在表达量幅度（MAE 0.042）与 LFC 排序（SPEARMAN_LFC 0.388）上显著领先；STATE 在 DE 基因检出（DES 0.198）与扰动可分性（PDS 0.560）上更强。
+2. **损失函数是关键**：自研 FusedPDSDESLoss 将 DES 从 0.198 提升至 0.236（+19%），为所有实验最高。
+3. **PDS 瓶颈不在模型容量**：108M → 201M → 301M 的容量扩展无法突破 PDS 0.53~0.56 的平台，瓶颈在于训练数据中扰动多样性不足。
+4. **MAE 基本"退出竞争"**：均值 baseline 的 MAE ≈ 0.026 几乎无法被超越，顶尖队伍 MAE_scaled 普遍为 0。
 
-详见 [VCC_REVIEW.md](./VCC_REVIEW.md)，涵盖：任务背景 → 两条技术路线 → 工程优化 → 实验设计与消融 → 指标分析 → 经验教训。
+## 工程优化
+
+- **bf16 混合精度训练**：H20 上训练加速 2.6–2.8×
+- **18080 全基因注意力显存优化**：数学等价改写，避免 ~500GB OOM
+- **多卡并行评测**：扰动按 rank 分片，消除 3× 重复计算
+- **训练稳定性**：checkpoint 断点恢复、训练循环主动 break、动态学习率调度等 13 处改进
+
+## 技术文档索引
+
+| 文档 | 内容 |
+|---|---|
+| [VCC_REVIEW.md](./VCC_REVIEW.md) | 任务背景、路线、工程优化、实验设计与结论的完整复盘 |
+| [scDFM/VCC_ADAPTATION.md](./scDFM/VCC_ADAPTATION.md) | scDFM 迁移到 VCC 的完整改动记录 |
+| [结果对比.md](./结果对比.md) | 全部实验的 7 项指标详细对比 |
+| [指标解释_DES_PDS与MAE权衡.md](./指标解释_DES_PDS与MAE权衡.md) | DES/PDS/MAE 原理与权衡分析 |
+| [state-vcc-local/VCC_CHALLENGE_STATUS.md](./state-vcc-local/VCC_CHALLENGE_STATUS.md) | 项目状态、评测口径与 2026 赛制信息 |
+
+## Citation
+
+若使用本项目代码或数据，请同时引用相关原始工作：
+
+- Arc Institute. *Virtual Cell Challenge*. https://virtualcellchallenge.org/
+- Arc Institute. *state*. https://github.com/ArcInstitute/state
+- *scDFM* (ICLR 2026). 原始论文与代码请见相应官方发布
